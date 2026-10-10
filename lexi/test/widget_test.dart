@@ -6,15 +6,13 @@ import 'package:luma_sleep/main.dart';
 void main() {
   testWidgets('shows the tonight dashboard', (tester) async {
     await tester.pumpWidget(const LumaSleepApp());
-    await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('Good evening'), findsOneWidget);
     expect(find.text('Start sleep tracking'), findsOneWidget);
 
-    // Scroll down to reveal the sound monitor section
-    await tester.drag(find.byType(CustomScrollView).first, const Offset(0, -600));
-    await tester.pump();
-
+    // The sound section is below the fold in the scrollable Tonight page.
+    await tester.drag(find.byType(CustomScrollView).first, const Offset(0, -700));
+    await tester.pumpAndSettle();
     expect(find.text('Sound monitor'), findsOneWidget);
   });
 }

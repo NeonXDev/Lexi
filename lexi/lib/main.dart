@@ -1,3 +1,5 @@
+// ignore_for_file: prefer_const_constructors, prefer_const_literals_to_create_immutables
+
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
@@ -8,6 +10,7 @@ import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'background_recording_service.dart';
 import 'local_storage.dart';
@@ -15,52 +18,105 @@ import 'sleep_models.dart';
 
 void main() {
   FlutterForegroundTask.initCommunicationPort();
-  runApp(const LumaSleepApp());
+  runApp(LumaSleepApp());
 }
 
 /// Entry point used by flutter_overlay_window on Android.
 @pragma('vm:entry-point')
 void overlayMain() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const _SleepOverlayApp());
+  runApp(_SleepOverlayApp());
 }
 
 class AppColors {
-  static const ink = Color(0xFFF5F7FF);
-  static const muted = Color(0xFF98A0BC);
-  static const background = Color(0xFF0A0D18);
-  static const surface = Color(0xFF111627);
-  static const surfaceRaised = Color(0xFF171D31);
-  static const border = Color(0xFF252D47);
-  static const lavender = Color(0xFFAC9CFF);
-  static const lavenderBright = Color(0xFFD0C7FF);
-  static const mint = Color(0xFFB6F5D0);
-  static const amber = Color(0xFFFFD58C);
-  static const coral = Color(0xFFFF9B93);
-  static const blue = Color(0xFF86C7FF);
+  static bool lightMode = false;
+
+  static Color get ink => lightMode ? Color(0xFF171A2B) : Color(0xFFF5F7FF);
+  static Color get muted => lightMode ? Color(0xFF65708B) : Color(0xFF98A0BC);
+  static Color get background => lightMode ? Color(0xFFF5F7FC) : Color(0xFF0A0D18);
+  static Color get surface => lightMode ? Color(0xFFFFFFFF) : Color(0xFF111627);
+  static Color get surfaceRaised => lightMode ? Color(0xFFEEF0F8) : Color(0xFF171D31);
+  static Color get border => lightMode ? Color(0xFFDDE1EE) : Color(0xFF252D47);
+  static Color get lavender => lightMode ? Color(0xFF6F60D7) : Color(0xFFAC9CFF);
+  static Color get lavenderBright => lightMode ? Color(0xFF5143B7) : Color(0xFFD0C7FF);
+  static Color get mint => lightMode ? Color(0xFF187A4B) : Color(0xFFB6F5D0);
+  static Color get amber => lightMode ? Color(0xFF9A6500) : Color(0xFFFFD58C);
+  static Color get coral => lightMode ? Color(0xFFB5342D) : Color(0xFFFF9B93);
+  static Color get blue => lightMode ? Color(0xFF286DAD) : Color(0xFF86C7FF);
 }
 
 enum AppTab { tonight, insights, recordings, settings }
 
-class LumaSleepApp extends StatelessWidget {
+class LumaSleepApp extends StatefulWidget {
   const LumaSleepApp({super.key});
 
   @override
+  State<LumaSleepApp> createState() => _LumaSleepAppState();
+}
+
+class _LumaSleepAppState extends State<LumaSleepApp> {
+  bool _lightMode = AppColors.lightMode;
+  SharedPreferencesAsync? _preferences;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAppearance();
+  }
+
+  Future<void> _loadAppearance() async {
+    try {
+      final preferences = _preferences ??= SharedPreferencesAsync();
+      final saved = await preferences.getBool('luma_light_mode');
+      if (!mounted || saved == null) return;
+      AppColors.lightMode = saved;
+      setState(() => _lightMode = saved);
+    } catch (_) {
+      // Tests or an unavailable preferences backend should not block the UI.
+    }
+  }
+
+  void _setLightMode(bool value) {
+    AppColors.lightMode = value;
+    setState(() => _lightMode = value);
+    unawaited(_persistAppearance(value));
+  }
+
+  Future<void> _persistAppearance(bool value) async {
+    try {
+      final preferences = _preferences ??= SharedPreferencesAsync();
+      await preferences.setBool('luma_light_mode', value);
+    } catch (_) {
+      // Appearance still changes for this run if persistence is unavailable.
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final base = ThemeData.dark(useMaterial3: true);
+    final base = _lightMode ? ThemeData.light(useMaterial3: true) : ThemeData.dark(useMaterial3: true);
+    final scheme = _lightMode
+        ? ColorScheme.light(
+      primary: AppColors.lavender,
+      onPrimary: Colors.white,
+      secondary: AppColors.mint,
+      onSecondary: Colors.white,
+      surface: AppColors.surface,
+      onSurface: AppColors.ink,
+    )
+        : ColorScheme.dark(
+      primary: AppColors.lavender,
+      onPrimary: AppColors.background,
+      secondary: AppColors.mint,
+      onSecondary: AppColors.background,
+      surface: AppColors.surface,
+      onSurface: AppColors.ink,
+    );
     return MaterialApp(
       title: 'Luma Sleep',
       debugShowCheckedModeBanner: false,
       theme: base.copyWith(
         scaffoldBackgroundColor: AppColors.background,
-        colorScheme: const ColorScheme.dark(
-          primary: AppColors.lavender,
-          onPrimary: AppColors.background,
-          secondary: AppColors.mint,
-          onSecondary: AppColors.background,
-          surface: AppColors.surface,
-          onSurface: AppColors.ink,
-        ),
+        colorScheme: scheme,
         textTheme: base.textTheme.apply(
           bodyColor: AppColors.ink,
           displayColor: AppColors.ink,
@@ -83,19 +139,31 @@ class LumaSleepApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const SleepHomePage(),
+      home: WithForegroundTask(
+        child: SleepHomePage(
+          lightMode: _lightMode,
+          onLightModeChanged: _setLightMode,
+        ),
+      ),
     );
   }
 }
 
 class SleepHomePage extends StatefulWidget {
-  const SleepHomePage({super.key});
+  const SleepHomePage({
+    super.key,
+    required this.lightMode,
+    required this.onLightModeChanged,
+  });
+
+  final bool lightMode;
+  final ValueChanged<bool> onLightModeChanged;
 
   @override
   State<SleepHomePage> createState() => _SleepHomePageState();
 }
 
-class _SleepHomePageState extends State<SleepHomePage> {
+class _SleepHomePageState extends State<SleepHomePage> with WidgetsBindingObserver {
   AppTab _activeTab = AppTab.tonight;
   bool _isTracking = false;
   bool _isStarting = false;
@@ -122,12 +190,14 @@ class _SleepHomePageState extends State<SleepHomePage> {
   String? _playingAudioPath;
   bool _isLoadingAudio = false;
   final LocalSleepStorage _storage = LocalSleepStorage();
+  Future<void> _eventSaveQueue = Future<void>.value();
   final List<SleepEvent> _events = [];
   final List<SleepSession> _sessions = [];
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     if (Platform.isAndroid) {
       _overlaySubscription = FlutterOverlayWindow.overlayListener.listen(_handleOverlayMessage);
       FlutterForegroundTask.addTaskDataCallback(_handleForegroundTaskData);
@@ -137,7 +207,17 @@ class _SleepHomePageState extends State<SleepHomePage> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && !_isStopping) {
+      // The foreground task persists sound markers from its own isolate while
+      // this isolate is backgrounded. Reload them when the UI is visible again.
+      unawaited(_loadLocalData());
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _sessionTimer?.cancel();
     _amplitudeTimer?.cancel();
     _stopWatchdog?.cancel();
@@ -169,7 +249,15 @@ class _SleepHomePageState extends State<SleepHomePage> {
     }
   }
 
-  Future<void> _saveEvents() => _storage.saveEvents(List<SleepEvent>.from(_events));
+  Future<void> _saveEvents() {
+    // Sound events can arrive while the previous preference write is still in
+    // flight. Serialize the snapshots so a later write cannot be overwritten
+    // by an older one.
+    final snapshot = List<SleepEvent>.from(_events);
+    final nextWrite = _eventSaveQueue.then((_) => _storage.saveEvents(snapshot));
+    _eventSaveQueue = nextWrite.catchError((_) {});
+    return _eventSaveQueue;
+  }
 
   Future<void> _saveSessions() => _storage.saveSessions(List<SleepSession>.from(_sessions));
 
@@ -210,9 +298,11 @@ class _SleepHomePageState extends State<SleepHomePage> {
             isSnore: isSnore,
           ),
         );
-        if (_events.length > 20) _events.removeLast();
+
       });
-      _saveEvents();
+      if (data['persisted'] != true) {
+        _saveEvents();
+      }
     } else if (type == 'service_error') {
       final message = data['message'] as String? ?? 'Background recording stopped.';
       final completer = _foregroundRecordingStarted;
@@ -239,7 +329,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
           priority: NotificationPriority.LOW,
           onlyAlertOnce: true,
         ),
-        iosNotificationOptions: const IOSNotificationOptions(
+        iosNotificationOptions: IOSNotificationOptions(
           showNotification: false,
           playSound: false,
         ),
@@ -258,21 +348,36 @@ class _SleepHomePageState extends State<SleepHomePage> {
   }
 
   Future<void> _requestBackgroundPermissions() async {
+    if (!Platform.isAndroid) return;
+
     try {
-      final permission = await FlutterForegroundTask.checkNotificationPermission();
-      if (permission != NotificationPermission.granted) {
+      // Android 13+ can hide the foreground-service notification when this is
+      // denied. Ask before starting so the user sees the service that protects
+      // the microphone session. Older Android versions report this as granted.
+      final notificationPermission =
+      await FlutterForegroundTask.checkNotificationPermission();
+      if (notificationPermission != NotificationPermission.granted) {
         await FlutterForegroundTask.requestNotificationPermission();
       }
+    } catch (_) {
+      // A denied notification prompt must not prevent microphone recording.
+    }
+
+    try {
+      // Do this while the app is visible. Android may show a system settings
+      // dialog, and the exemption helps OEMs keep the service alive overnight.
       if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
         await FlutterForegroundTask.requestIgnoreBatteryOptimization();
       }
     } catch (_) {
-      // Background permission prompts are platform-specific. Recording can still start.
+      // Some vendors do not expose this exemption. The foreground service
+      // still provides the platform-supported background execution path.
     }
   }
 
   Future<String> _startAndroidRecordingService() async {
     await _initForegroundService();
+    await _requestBackgroundPermissions();
     await FlutterForegroundTask.saveData(key: 'sensitivity', value: _sensitivity);
     await FlutterForegroundTask.saveData(key: 'monitorEnabled', value: _soundMonitorEnabled);
 
@@ -286,15 +391,15 @@ class _SleepHomePageState extends State<SleepHomePage> {
         serviceId: 1905,
         notificationTitle: 'Luma Sleep',
         notificationText: 'Starting sleep sound monitoring…',
+        notificationButtons: const [
+          NotificationButton(id: 'stop_sleep', text: 'Stop'),
+        ],
         callback: startSleepRecordingService,
       );
       if (result is ServiceRequestFailure) {
         throw result.error;
       }
-      // These prompts should not block the Start button. The service can begin
-      // immediately, then the user can grant notification/battery permissions.
-      unawaited(_requestBackgroundPermissions());
-      return await completer.future.timeout(const Duration(seconds: 6));
+      return await completer.future.timeout(Duration(seconds: 12));
     } finally {
       if (identical(_foregroundRecordingStarted, completer)) {
         _foregroundRecordingStarted = null;
@@ -307,7 +412,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
     final stamp = DateTime.now().millisecondsSinceEpoch;
     final path = '${directory.path}/luma_sleep_$stamp.m4a';
     await recorder.start(
-      const RecordConfig(
+      RecordConfig(
         encoder: AudioEncoder.aacLc,
         sampleRate: 44100,
         numChannels: 1,
@@ -339,20 +444,24 @@ class _SleepHomePageState extends State<SleepHomePage> {
         return;
       }
 
-      try {
-        final foregroundPath = await _startAndroidRecordingService();
-        _activeAudioPath = foregroundPath;
-        await recorder.dispose();
-        _usingForegroundService = true;
-        usingForegroundService = true;
-      } catch (_) {
-        // If the native foreground-service configuration is missing, still
-        // allow tracking in the app instead of leaving the button stuck.
+      if (Platform.isAndroid) {
         try {
-          await FlutterForegroundTask.stopService().timeout(const Duration(seconds: 3));
-        } catch (_) {}
+          final foregroundPath = await _startAndroidRecordingService();
+          _activeAudioPath = foregroundPath;
+          await recorder.dispose();
+          _usingForegroundService = true;
+          usingForegroundService = true;
+        } catch (_) {
+          // If the native foreground-service configuration is missing, still
+          // allow tracking in the app instead of leaving the button stuck.
+          try {
+            await FlutterForegroundTask.stopService().timeout(Duration(seconds: 3));
+          } catch (_) {}
+          await _startLocalRecording(recorder);
+          _usingForegroundService = false;
+        }
+      } else {
         await _startLocalRecording(recorder);
-        _usingForegroundService = false;
       }
 
       if (!mounted) {
@@ -387,7 +496,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
   void _startTimers() {
     _sessionTimer?.cancel();
     _amplitudeTimer?.cancel();
-    _sessionTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+    _sessionTimer = Timer.periodic(Duration(seconds: 1), (_) {
       if (!mounted || _sessionStarted == null) return;
       setState(() {
         _elapsed = DateTime.now().difference(_sessionStarted!);
@@ -395,7 +504,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
       _publishOverlayTime();
     });
     if (_recorder != null) {
-      _amplitudeTimer = Timer.periodic(const Duration(milliseconds: 900), (_) {
+      _amplitudeTimer = Timer.periodic(Duration(milliseconds: 900), (_) {
         _readAmplitude();
       });
     }
@@ -443,7 +552,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
     // overlay permission, which must never block ending a sleep session.
     if (!_overlayVisible) return;
     try {
-      await FlutterOverlayWindow.closeOverlay().timeout(const Duration(seconds: 2));
+      await FlutterOverlayWindow.closeOverlay().timeout(Duration(seconds: 2));
     } catch (_) {
       // Ignore a missing, stale, or slow overlay; tracking still ends.
     }
@@ -467,10 +576,12 @@ class _SleepHomePageState extends State<SleepHomePage> {
     try {
       final amplitude = await recorder.getAmplitude();
       if (!mounted || !_isTracking || !identical(recorder, _recorder)) return;
-      final current = amplitude.current;
+      // Use the peak as well as the average so short sounds are not missed
+      // between the 900 ms monitoring samples.
+      final current = math.max(amplitude.current, amplitude.max).toDouble();
       if (current.isNaN || current < _detectionThreshold) return;
       final now = DateTime.now();
-      if (_lastEvent != null && now.difference(_lastEvent!).inSeconds < 8) {
+      if (_lastEvent != null && now.difference(_lastEvent!).inSeconds < 5) {
         return;
       }
       _lastEvent = now;
@@ -489,7 +600,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
             isSnore: likelySnore,
           ),
         );
-        if (_events.length > 20) _events.removeLast();
+
       });
       _saveEvents();
     } catch (_) {
@@ -534,7 +645,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
     _isStopping = true;
     _stopCleanupInFlight = true;
     _stopWatchdog?.cancel();
-    _stopWatchdog = Timer(const Duration(seconds: 8), () {
+    _stopWatchdog = Timer(Duration(seconds: 8), () {
       if (!_stopCleanupInFlight) return;
       _stopCleanupInFlight = false;
       _isStopping = false;
@@ -587,7 +698,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
       );
       if (_sessions.length > 30) _sessions.removeLast();
       try {
-        await _saveSessions().timeout(const Duration(seconds: 3));
+        await _saveSessions().timeout(Duration(seconds: 3));
       } catch (_) {
         // Do not let a storage failure prevent the microphone from stopping.
       }
@@ -596,12 +707,12 @@ class _SleepHomePageState extends State<SleepHomePage> {
     try {
       if (usingForegroundService) {
         if (serviceStopRequest != null) {
-          final result = await serviceStopRequest.timeout(const Duration(seconds: 5));
+          final result = await serviceStopRequest.timeout(Duration(seconds: 5));
           if (result is ServiceRequestFailure) throw result.error;
         }
       } else if (recorder != null) {
-        finishedAudioPath = await recorder.stop().timeout(const Duration(seconds: 5)) ?? finishedAudioPath;
-        await recorder.dispose().timeout(const Duration(seconds: 3));
+        finishedAudioPath = await recorder.stop().timeout(Duration(seconds: 5)) ?? finishedAudioPath;
+        await recorder.dispose().timeout(Duration(seconds: 3));
       }
     } catch (_) {
       // The UI session is already ended. Native shutdown can finish later or
@@ -660,7 +771,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _activeTab.index,
         onDestinationSelected: _onTabChanged,
-        destinations: const [
+        destinations: [
           NavigationDestination(
             icon: Icon(Icons.nights_stay_outlined),
             selectedIcon: Icon(Icons.nights_stay_rounded),
@@ -689,16 +800,16 @@ class _SleepHomePageState extends State<SleepHomePage> {
   Widget _buildTonight() {
     return SafeArea(
       child: CustomScrollView(
-        physics: const BouncingScrollPhysics(),
+        physics: BouncingScrollPhysics(),
         slivers: [
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 32),
+            padding: EdgeInsets.fromLTRB(20, 18, 20, 32),
             sliver: SliverList(
               delegate: SliverChildListDelegate([
                 _buildHeader(),
-                const SizedBox(height: 30),
+                SizedBox(height: 30),
                 _eyebrow(_todayLabel()),
-                const SizedBox(height: 8),
+                SizedBox(height: 8),
                 Text(
                   'Good evening',
                   style: Theme.of(context).textTheme.headlineMedium?.copyWith(
@@ -706,7 +817,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
                     letterSpacing: -.8,
                   ),
                 ),
-                const SizedBox(height: 6),
+                SizedBox(height: 6),
                 Text(
                   _isTracking
                       ? 'Luma is quietly listening in the background.'
@@ -716,19 +827,19 @@ class _SleepHomePageState extends State<SleepHomePage> {
                     height: 1.4,
                   ),
                 ),
-                const SizedBox(height: 22),
+                SizedBox(height: 22),
                 _buildTrackingCard(),
-                const SizedBox(height: 26),
-                _buildSectionHeading('Last night', 'View report', () {
+                SizedBox(height: 26),
+                _sectionHeading('Last night', 'View report', () {
                   _onTabChanged(AppTab.insights.index);
                 }),
-                const SizedBox(height: 12),
+                SizedBox(height: 12),
                 _buildLastNightCard(),
-                const SizedBox(height: 26),
-                _buildSectionHeading('Sound monitor', 'How it works', () {
+                SizedBox(height: 26),
+                _sectionHeading('Sound monitor', 'How it works', () {
                   _showSoundInfo();
                 }),
-                const SizedBox(height: 12),
+                SizedBox(height: 12),
                 _buildSoundMonitorCard(),
               ]),
             ),
@@ -749,9 +860,9 @@ class _SleepHomePageState extends State<SleepHomePage> {
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: AppColors.lavender.withValues(alpha: .16)),
           ),
-          child: const Icon(Icons.nightlight_round, color: AppColors.lavenderBright, size: 22),
+          child: Icon(Icons.nightlight_round, color: AppColors.lavenderBright, size: 22),
         ),
-        const SizedBox(width: 11),
+        SizedBox(width: 11),
         Text(
           'luma',
           style: Theme.of(context).textTheme.titleLarge?.copyWith(
@@ -759,36 +870,24 @@ class _SleepHomePageState extends State<SleepHomePage> {
             letterSpacing: -.7,
           ),
         ),
-        const Spacer(),
-        Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: AppColors.surfaceRaised,
-            border: Border.all(color: AppColors.border),
-          ),
-          child: const Center(
-            child: Icon(Icons.person_outline_rounded, color: AppColors.lavenderBright, size: 20),
-          ),
-        ),
+        Spacer(),
       ],
     );
   }
 
   Widget _buildTrackingCard() {
     return Container(
-      padding: const EdgeInsets.all(22),
+      padding: EdgeInsets.all(22),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(28),
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [Color(0xFF22264A), Color(0xFF151A32)],
         ),
         border: Border.all(color: AppColors.lavender.withValues(alpha: .22)),
         boxShadow: [
-          BoxShadow(color: AppColors.lavender.withValues(alpha: .09), blurRadius: 34, offset: const Offset(0, 14)),
+          BoxShadow(color: AppColors.lavender.withValues(alpha: .09), blurRadius: 34, offset: Offset(0, 14)),
         ],
       ),
       child: Stack(
@@ -811,14 +910,14 @@ class _SleepHomePageState extends State<SleepHomePage> {
               Row(
                 children: [
                   _statusDot(_isTracking ? AppColors.mint : AppColors.lavender),
-                  const SizedBox(width: 8),
+                  SizedBox(width: 8),
                   Text(
                     _isTracking
                         ? 'TRACKING YOUR SLEEP'
                         : _stopCleanupInFlight
                         ? 'FINISHING RECORDING'
                         : 'READY FOR TONIGHT',
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: AppColors.lavenderBright,
                       fontSize: 11,
                       fontWeight: FontWeight.w800,
@@ -827,50 +926,50 @@ class _SleepHomePageState extends State<SleepHomePage> {
                   ),
                 ],
               ),
-              const SizedBox(height: 22),
+              SizedBox(height: 22),
               Text(
                 _isTracking ? _formatElapsed(_elapsed) : '—',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 42,
                   height: 1,
                   fontWeight: FontWeight.w800,
                   letterSpacing: -1.5,
                 ),
               ),
-              const SizedBox(height: 8),
+              SizedBox(height: 8),
               Text(
                 _isTracking
                     ? 'listening since ${_formatStartTime()}'
                     : _stopCleanupInFlight
                     ? 'saving the recording'
                     : 'no session recorded yet',
-                style: const TextStyle(color: AppColors.muted, fontSize: 14),
+                style: TextStyle(color: AppColors.muted, fontSize: 14),
               ),
-              const SizedBox(height: 22),
+              SizedBox(height: 22),
               Row(
                 children: [
                   Expanded(
                     child: _isTracking
                         ? OutlinedButton.icon(
                       onPressed: _stopTracking,
-                      icon: const Icon(Icons.stop_rounded, size: 18),
-                      label: const Text('End session'),
+                      icon: Icon(Icons.stop_rounded, size: 18),
+                      label: Text('End session'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: AppColors.coral,
                         side: BorderSide(color: AppColors.coral.withValues(alpha: .55)),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        padding: EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
                       ),
                     )
                         : FilledButton.icon(
                       onPressed: _isStarting || _isStopping || _stopCleanupInFlight ? null : _startTracking,
                       icon: _isStarting || _isStopping
-                          ? const SizedBox(
+                          ? SizedBox(
                         height: 17,
                         width: 17,
                         child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.background),
                       )
-                          : const Icon(Icons.play_arrow_rounded, size: 20),
+                          : Icon(Icons.play_arrow_rounded, size: 20),
                       label: Text(
                         _isStarting
                             ? 'Starting…'
@@ -882,9 +981,9 @@ class _SleepHomePageState extends State<SleepHomePage> {
                         backgroundColor: AppColors.mint,
                         foregroundColor: AppColors.background,
                         disabledBackgroundColor: AppColors.mint.withValues(alpha: .7),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        padding: EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                        textStyle: const TextStyle(fontWeight: FontWeight.w800),
+                        textStyle: TextStyle(fontWeight: FontWeight.w800),
                       ),
                     ),
                   ),
@@ -907,14 +1006,14 @@ class _SleepHomePageState extends State<SleepHomePage> {
   }
 
   String _todayLabel() {
-    const weekdays = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'];
-    const months = ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER'];
+    final weekdays = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'];
+    final months = ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER'];
     final now = DateTime.now();
     return '${weekdays[now.weekday - 1]}, ${months[now.month - 1]} ${now.day}';
   }
 
   String _sessionDate(DateTime value) {
-    const weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    final weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
     return '${weekdays[value.weekday - 1]} night';
   }
 
@@ -929,13 +1028,13 @@ class _SleepHomePageState extends State<SleepHomePage> {
     return Container(
       height: 104,
       decoration: _cardDecoration(),
-      child: const Center(child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.lavender)),
+      child: Center(child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.lavender)),
     );
   }
 
   Widget _emptyCard({required IconData icon, required String title, required String subtitle, required Color color}) {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: EdgeInsets.all(18),
       decoration: _cardDecoration(),
       child: Row(
         children: [
@@ -945,14 +1044,14 @@ class _SleepHomePageState extends State<SleepHomePage> {
             decoration: BoxDecoration(color: color.withValues(alpha: .11), borderRadius: BorderRadius.circular(15)),
             child: Icon(icon, color: color),
           ),
-          const SizedBox(width: 13),
+          SizedBox(width: 13),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-                const SizedBox(height: 5),
-                Text(subtitle, style: const TextStyle(color: AppColors.muted, fontSize: 12, height: 1.35)),
+                Text(title, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                SizedBox(height: 5),
+                Text(subtitle, style: TextStyle(color: AppColors.muted, fontSize: 12, height: 1.35)),
               ],
             ),
           ),
@@ -975,7 +1074,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
     final session = _sessions.first;
     final score = math.min(100, (session.duration.inMinutes / 480 * 100).round());
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: EdgeInsets.all(18),
       decoration: _cardDecoration(),
       child: Column(
         children: [
@@ -985,31 +1084,31 @@ class _SleepHomePageState extends State<SleepHomePage> {
                 width: 46,
                 height: 46,
                 decoration: BoxDecoration(color: AppColors.mint.withValues(alpha: .11), borderRadius: BorderRadius.circular(15)),
-                child: const Icon(Icons.bedtime_rounded, color: AppColors.mint),
+                child: Icon(Icons.bedtime_rounded, color: AppColors.mint),
               ),
-              const SizedBox(width: 13),
+              SizedBox(width: 13),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(_sessionDate(session.startedAt), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-                    const SizedBox(height: 4),
-                    Text('${_eventTime(session.startedAt)} – ${_eventTime(session.endedAt)}', style: const TextStyle(color: AppColors.muted, fontSize: 12)),
+                    Text(_sessionDate(session.startedAt), style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                    SizedBox(height: 4),
+                    Text('${_eventTime(session.startedAt)} – ${_eventTime(session.endedAt)}', style: TextStyle(color: AppColors.muted, fontSize: 12)),
                   ],
                 ),
               ),
               _scoreRing('$score', AppColors.mint, progress: score / 100),
             ],
           ),
-          const SizedBox(height: 18),
+          SizedBox(height: 18),
           Container(height: 1, color: AppColors.border),
-          const SizedBox(height: 16),
+          SizedBox(height: 16),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               _InlineMetric(label: 'Time tracked', value: _formatDuration(session.duration), icon: Icons.schedule_rounded),
               _InlineMetric(label: 'Sound events', value: '${_events.length}', icon: Icons.graphic_eq_rounded),
-              const _InlineMetric(label: 'Status', value: 'Saved', icon: Icons.check_circle_outline_rounded),
+              _InlineMetric(label: 'Status', value: 'Saved', icon: Icons.check_circle_outline_rounded),
             ],
           ),
         ],
@@ -1020,7 +1119,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
   Widget _buildSoundMonitorCard() {
     final event = _events.isNotEmpty ? _events.first : null;
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: EdgeInsets.all(18),
       decoration: _cardDecoration(),
       child: Column(
         children: [
@@ -1034,10 +1133,10 @@ class _SleepHomePageState extends State<SleepHomePage> {
                   color: AppColors.lavender.withValues(alpha: .12),
                   borderRadius: BorderRadius.circular(15),
                 ),
-                child: const Icon(Icons.graphic_eq_rounded, color: AppColors.lavenderBright),
+                child: Icon(Icons.graphic_eq_rounded, color: AppColors.lavenderBright),
               ),
-              const SizedBox(width: 13),
-              const Expanded(
+              SizedBox(width: 13),
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1050,13 +1149,13 @@ class _SleepHomePageState extends State<SleepHomePage> {
               Switch.adaptive(
                 value: _soundMonitorEnabled,
                 onChanged: _setSoundMonitorEnabled,
-                activeTrackColor: AppColors.mint,
+                activeThumbColor: AppColors.mint,
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          SizedBox(height: 16),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+            padding: EdgeInsets.symmetric(horizontal: 13, vertical: 11),
             decoration: BoxDecoration(
               color: AppColors.background.withValues(alpha: .5),
               borderRadius: BorderRadius.circular(14),
@@ -1068,16 +1167,16 @@ class _SleepHomePageState extends State<SleepHomePage> {
                   size: 18,
                   color: event == null ? AppColors.muted : AppColors.amber,
                 ),
-                const SizedBox(width: 9),
+                SizedBox(width: 9),
                 Expanded(
                   child: Text(
                     event == null ? 'No sound events recorded yet' : 'Latest · ${event.kind.toLowerCase()}',
-                    style: const TextStyle(fontSize: 12, color: AppColors.muted),
+                    style: TextStyle(fontSize: 12, color: AppColors.muted),
                   ),
                 ),
                 Text(
                   event == null ? '--' : '${event.decibels.round()} dB',
-                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
                 ),
               ],
             ),
@@ -1090,18 +1189,18 @@ class _SleepHomePageState extends State<SleepHomePage> {
   Widget _buildInsights() {
     return SafeArea(
       child: CustomScrollView(
-        physics: const BouncingScrollPhysics(),
+        physics: BouncingScrollPhysics(),
         slivers: [
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 32),
+            padding: EdgeInsets.fromLTRB(20, 18, 20, 32),
             sliver: SliverList(
               delegate: SliverChildListDelegate([
                 _buildPageHeader('Insights', 'The little patterns add up.'),
-                const SizedBox(height: 26),
+                SizedBox(height: 26),
                 _buildInsightScoreCard(),
-                const SizedBox(height: 24),
+                SizedBox(height: 24),
                 _sectionTitle('Sleep cycles'),
-                const SizedBox(height: 12),
+                SizedBox(height: 12),
                 _buildSleepCycleChart(),
               ]),
             ),
@@ -1125,10 +1224,10 @@ class _SleepHomePageState extends State<SleepHomePage> {
     final session = _sessions.first;
     final score = math.min(100, (session.duration.inMinutes / 480 * 100).round());
     return Container(
-      padding: const EdgeInsets.all(22),
+      padding: EdgeInsets.all(22),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(26),
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [Color(0xFF212747), Color(0xFF151A2D)],
@@ -1146,24 +1245,24 @@ class _SleepHomePageState extends State<SleepHomePage> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text('$score', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w800, height: 1)),
-                    const SizedBox(height: 4),
-                    const Text('SCORE', style: TextStyle(color: AppColors.muted, fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 1)),
+                    Text('$score', style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800, height: 1)),
+                    SizedBox(height: 4),
+                    Text('SCORE', style: TextStyle(color: AppColors.muted, fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 1)),
                   ],
                 ),
               ),
             ),
           ),
-          const SizedBox(width: 20),
+          SizedBox(width: 20),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Your first report', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
-                const SizedBox(height: 7),
-                Text('${_formatDuration(session.duration)} tracked on ${_sessionDate(session.startedAt)}.', style: const TextStyle(color: AppColors.muted, fontSize: 12, height: 1.45)),
-                const SizedBox(height: 13),
-                const Row(
+                Text('Your first report', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+                SizedBox(height: 7),
+                Text('${_formatDuration(session.duration)} tracked on ${_sessionDate(session.startedAt)}.', style: TextStyle(color: AppColors.muted, fontSize: 12, height: 1.45)),
+                SizedBox(height: 13),
+                Row(
                   children: [
                     Icon(Icons.lock_outline_rounded, color: AppColors.mint, size: 17),
                     SizedBox(width: 5),
@@ -1197,32 +1296,32 @@ class _SleepHomePageState extends State<SleepHomePage> {
     }
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(18, 18, 18, 15),
+      padding: EdgeInsets.fromLTRB(18, 18, 18, 15),
       decoration: _cardDecoration(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Expanded(
+              Expanded(
                 child: Text('Estimated sleep cycles', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 5),
                 decoration: BoxDecoration(
                   color: AppColors.blue.withValues(alpha: .11),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Text('90 MIN BLOCKS', style: TextStyle(color: AppColors.blue, fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: .6)),
+                child: Text('90 MIN BLOCKS', style: TextStyle(color: AppColors.blue, fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: .6)),
               ),
             ],
           ),
-          const SizedBox(height: 5),
-          const Text(
+          SizedBox(height: 5),
+          Text(
             'A duration-based estimate, not REM, light, or deep-stage detection.',
             style: TextStyle(color: AppColors.muted, fontSize: 11, height: 1.35),
           ),
-          const SizedBox(height: 18),
+          SizedBox(height: 18),
           SizedBox(
             height: 164,
             child: Row(
@@ -1232,14 +1331,14 @@ class _SleepHomePageState extends State<SleepHomePage> {
                 final ratio = math.max(.08, cycles / maxCycles).toDouble();
                 return Expanded(
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 5),
+                    padding: EdgeInsets.symmetric(horizontal: 5),
                     child: Column(
                       children: [
                         Text(
                           '$cycles',
-                          style: const TextStyle(color: AppColors.lavenderBright, fontSize: 11, fontWeight: FontWeight.w800),
+                          style: TextStyle(color: AppColors.lavenderBright, fontSize: 11, fontWeight: FontWeight.w800),
                         ),
-                        const SizedBox(height: 7),
+                        SizedBox(height: 7),
                         Expanded(
                           child: Align(
                             alignment: Alignment.bottomCenter,
@@ -1248,7 +1347,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
                               heightFactor: ratio,
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
-                                  borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
+                                  borderRadius: BorderRadius.vertical(top: Radius.circular(10)),
                                   gradient: LinearGradient(
                                     begin: Alignment.topCenter,
                                     end: Alignment.bottomCenter,
@@ -1259,12 +1358,12 @@ class _SleepHomePageState extends State<SleepHomePage> {
                             ),
                           ),
                         ),
-                        const SizedBox(height: 7),
+                        SizedBox(height: 7),
                         Container(height: 1, color: AppColors.border),
-                        const SizedBox(height: 7),
+                        SizedBox(height: 7),
                         Text(
                           _shortSessionDate(session.startedAt),
-                          style: const TextStyle(color: AppColors.muted, fontSize: 10, fontWeight: FontWeight.w700),
+                          style: TextStyle(color: AppColors.muted, fontSize: 10, fontWeight: FontWeight.w700),
                         ),
                       ],
                     ),
@@ -1273,19 +1372,19 @@ class _SleepHomePageState extends State<SleepHomePage> {
               }).toList(),
             ),
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
           Row(
             children: [
-              Container(width: 8, height: 8, decoration: const BoxDecoration(color: AppColors.blue, shape: BoxShape.circle)),
-              const SizedBox(width: 7),
+              Container(width: 8, height: 8, decoration: BoxDecoration(color: AppColors.blue, shape: BoxShape.circle)),
+              SizedBox(width: 7),
               Text(
                 '${chartSessions.length} ${chartSessions.length == 1 ? 'night' : 'nights'} recorded',
-                style: const TextStyle(color: AppColors.muted, fontSize: 11),
+                style: TextStyle(color: AppColors.muted, fontSize: 11),
               ),
-              const Spacer(),
+              Spacer(),
               Text(
                 'Up to $maxCycles cycles',
-                style: const TextStyle(color: AppColors.lavenderBright, fontSize: 11, fontWeight: FontWeight.w700),
+                style: TextStyle(color: AppColors.lavenderBright, fontSize: 11, fontWeight: FontWeight.w700),
               ),
             ],
           ),
@@ -1300,7 +1399,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
   }
 
   String _shortSessionDate(DateTime value) {
-    const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     return weekdays[value.weekday - 1];
   }
 
@@ -1337,9 +1436,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
         });
       }
       await _audioPlayer.setFilePath(path);
-      if (mounted) {
-        setState(() => _isLoadingAudio = false);
-      }
+      if (mounted) setState(() => _isLoadingAudio = false);
       unawaited(_playLoadedAudio());
     } catch (_) {
       if (mounted) {
@@ -1390,7 +1487,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
               : 'Play recording',
           onPressed: path == null ? null : () => _toggleAudioPlayback(session),
           icon: isLoading
-              ? const SizedBox(
+              ? SizedBox(
             width: 19,
             height: 19,
             child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.lavenderBright),
@@ -1420,13 +1517,13 @@ class _SleepHomePageState extends State<SleepHomePage> {
       children: [
         Row(
           children: [
-            const Expanded(
+            Expanded(
               child: Text('SAVED RECORDINGS', style: TextStyle(color: AppColors.muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.1)),
             ),
-            Text('${_sessions.length} sessions', style: const TextStyle(color: AppColors.lavenderBright, fontSize: 12, fontWeight: FontWeight.w700)),
+            Text('${_sessions.length} sessions', style: TextStyle(color: AppColors.lavenderBright, fontSize: 12, fontWeight: FontWeight.w700)),
           ],
         ),
-        const SizedBox(height: 12),
+        SizedBox(height: 12),
         ..._sessions.take(8).map(_buildRecordingTile),
       ],
     );
@@ -1434,8 +1531,8 @@ class _SleepHomePageState extends State<SleepHomePage> {
 
   Widget _buildRecordingTile(SleepSession session) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.fromLTRB(15, 13, 8, 13),
+      margin: EdgeInsets.only(bottom: 10),
+      padding: EdgeInsets.fromLTRB(15, 13, 8, 13),
       decoration: _cardDecoration(),
       child: Row(
         children: [
@@ -1446,18 +1543,18 @@ class _SleepHomePageState extends State<SleepHomePage> {
               color: AppColors.blue.withValues(alpha: .11),
               borderRadius: BorderRadius.circular(13),
             ),
-            child: const Icon(Icons.mic_rounded, color: AppColors.blue, size: 21),
+            child: Icon(Icons.mic_rounded, color: AppColors.blue, size: 21),
           ),
-          const SizedBox(width: 12),
+          SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(_sessionDate(session.startedAt), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-                const SizedBox(height: 4),
+                Text(_sessionDate(session.startedAt), style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                SizedBox(height: 4),
                 Text(
                   '${_eventTime(session.startedAt)} – ${_eventTime(session.endedAt)}  ·  ${_formatDuration(session.duration)}',
-                  style: const TextStyle(color: AppColors.muted, fontSize: 11),
+                  style: TextStyle(color: AppColors.muted, fontSize: 11),
                 ),
               ],
             ),
@@ -1471,18 +1568,18 @@ class _SleepHomePageState extends State<SleepHomePage> {
   Widget _buildRecordings() {
     return SafeArea(
       child: CustomScrollView(
-        physics: const BouncingScrollPhysics(),
+        physics: BouncingScrollPhysics(),
         slivers: [
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 32),
+            padding: EdgeInsets.fromLTRB(20, 18, 20, 32),
             sliver: SliverList(
               delegate: SliverChildListDelegate([
                 _buildPageHeader('Sound log', 'A gentle record of the night.'),
-                const SizedBox(height: 24),
+                SizedBox(height: 24),
                 _buildStorageBanner(),
-                const SizedBox(height: 24),
+                SizedBox(height: 24),
                 _buildSavedRecordings(),
-                const SizedBox(height: 24),
+                SizedBox(height: 24),
                 if (!_isLoadingData && _events.isEmpty)
                   _emptyCard(
                     icon: Icons.graphic_eq_rounded,
@@ -1493,18 +1590,18 @@ class _SleepHomePageState extends State<SleepHomePage> {
                 else if (!_isLoadingData) ...[
                   Row(
                     children: [
-                      const Expanded(child: Text('RECENT EVENTS', style: TextStyle(color: AppColors.muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.1))),
-                      Text('${_events.length} events', style: const TextStyle(color: AppColors.lavenderBright, fontSize: 12, fontWeight: FontWeight.w700)),
+                      Expanded(child: Text('RECENT EVENTS', style: TextStyle(color: AppColors.muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.1))),
+                      Text('${_events.length} events', style: TextStyle(color: AppColors.lavenderBright, fontSize: 12, fontWeight: FontWeight.w700)),
                     ],
                   ),
-                  const SizedBox(height: 12),
+                  SizedBox(height: 12),
                   ..._events.take(8).map(_buildEventCard),
-                  const SizedBox(height: 10),
+                  SizedBox(height: 10),
                   Center(
                     child: TextButton.icon(
                       onPressed: () => _showSnack('Your recordings stay on this device only.'),
-                      icon: const Icon(Icons.lock_outline_rounded, size: 15),
-                      label: const Text('Your recordings are private'),
+                      icon: Icon(Icons.lock_outline_rounded, size: 15),
+                      label: Text('Your recordings are private'),
                       style: TextButton.styleFrom(foregroundColor: AppColors.muted),
                     ),
                   ),
@@ -1519,7 +1616,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
 
   Widget _buildStorageBanner() {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppColors.mint.withValues(alpha: .08),
         borderRadius: BorderRadius.circular(18),
@@ -1527,14 +1624,14 @@ class _SleepHomePageState extends State<SleepHomePage> {
       ),
       child: Row(
         children: [
-          const Icon(Icons.shield_outlined, color: AppColors.mint, size: 22),
-          const SizedBox(width: 11),
-          const Expanded(
+          Icon(Icons.shield_outlined, color: AppColors.mint, size: 22),
+          SizedBox(width: 11),
+          Expanded(
             child: Text('Audio and sound markers stay on this device. You can delete everything from Settings.', style: TextStyle(color: AppColors.mint, fontSize: 12, height: 1.4)),
           ),
           IconButton(
             onPressed: () => _showSoundInfo(),
-            icon: const Icon(Icons.info_outline_rounded, color: AppColors.mint, size: 19),
+            icon: Icon(Icons.info_outline_rounded, color: AppColors.mint, size: 19),
             visualDensity: VisualDensity.compact,
           ),
         ],
@@ -1546,8 +1643,8 @@ class _SleepHomePageState extends State<SleepHomePage> {
     final time = _eventTime(event.time);
     final color = event.isSnore ? AppColors.amber : AppColors.blue;
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.fromLTRB(15, 15, 13, 15),
+      margin: EdgeInsets.only(bottom: 10),
+      padding: EdgeInsets.fromLTRB(15, 15, 13, 15),
       decoration: _cardDecoration(),
       child: Row(
         children: [
@@ -1557,28 +1654,28 @@ class _SleepHomePageState extends State<SleepHomePage> {
             decoration: BoxDecoration(color: color.withValues(alpha: .12), borderRadius: BorderRadius.circular(14)),
             child: Icon(event.isSnore ? Icons.air_rounded : Icons.multitrack_audio_rounded, color: color, size: 21),
           ),
-          const SizedBox(width: 12),
+          SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   children: [
-                    Flexible(child: Text(event.kind, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700))),
-                    const SizedBox(width: 7),
+                    Flexible(child: Text(event.kind, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700))),
+                    SizedBox(width: 7),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                      padding: EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                       decoration: BoxDecoration(color: color.withValues(alpha: .12), borderRadius: BorderRadius.circular(5)),
                       child: Text('${event.decibels.round()} dB', style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.w800)),
                     ),
                   ],
                 ),
-                const SizedBox(height: 5),
-                Text('$time  ·  ${event.detail}', style: const TextStyle(color: AppColors.muted, fontSize: 11)),
+                SizedBox(height: 5),
+                Text('$time  ·  ${event.detail}', style: TextStyle(color: AppColors.muted, fontSize: 11)),
               ],
             ),
           ),
-          const SizedBox(width: 8),
+          SizedBox(width: 8),
         ],
       ),
     );
@@ -1595,16 +1692,16 @@ class _SleepHomePageState extends State<SleepHomePage> {
   Widget _buildSettings() {
     return SafeArea(
       child: CustomScrollView(
-        physics: const BouncingScrollPhysics(),
+        physics: BouncingScrollPhysics(),
         slivers: [
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 32),
+            padding: EdgeInsets.fromLTRB(20, 18, 20, 32),
             sliver: SliverList(
               delegate: SliverChildListDelegate([
                 _buildPageHeader('Settings', 'Make Luma feel like yours.'),
-                const SizedBox(height: 26),
+                SizedBox(height: 26),
                 _settingsGroupLabel('NIGHT MONITOR'),
-                const SizedBox(height: 9),
+                SizedBox(height: 9),
                 _settingsCard([
                   _settingRow(
                     icon: Icons.graphic_eq_rounded,
@@ -1614,7 +1711,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
                     trailing: Switch.adaptive(
                       value: _soundMonitorEnabled,
                       onChanged: _setSoundMonitorEnabled,
-                      activeTrackColor: AppColors.mint,
+                      activeThumbColor: AppColors.mint,
                     ),
                   ),
                   _divider(),
@@ -1630,7 +1727,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
                         if (value && _isTracking) _showSleepOverlayIfEnabled();
                         if (!value) _hideSleepOverlay();
                       },
-                      activeTrackColor: AppColors.mint,
+                      activeThumbColor: AppColors.mint,
                     ),
                   ),
                   _divider(),
@@ -1638,21 +1735,62 @@ class _SleepHomePageState extends State<SleepHomePage> {
                     icon: Icons.speed_rounded,
                     color: AppColors.amber,
                     title: 'Detection sensitivity',
-                    subtitle: const ['Quiet', 'Balanced', 'Sensitive'][_sensitivity - 1],
-                    trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
+                    subtitle: ['Quiet', 'Balanced', 'Sensitive'][_sensitivity - 1],
+                    trailing: Icon(Icons.chevron_right_rounded, color: AppColors.muted),
                     onTap: _chooseSensitivity,
                   ),
+                  _divider(),
+                  _settingRow(
+                    icon: widget.lightMode ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
+                    color: AppColors.lavenderBright,
+                    title: 'Light theme',
+                    subtitle: widget.lightMode ? 'Light text and surfaces' : 'Dark text and surfaces',
+                    trailing: Switch.adaptive(
+                      value: widget.lightMode,
+                      onChanged: widget.onLightModeChanged,
+                      activeThumbColor: AppColors.mint,
+                    ),
+                  ),
                 ]),
-                const SizedBox(height: 25),
+                SizedBox(height: 25),
+                _settingsGroupLabel('BACKGROUND LIMITS'),
+                SizedBox(height: 9),
+                _settingsCard([
+                  _settingRow(
+                    icon: Icons.lock_outline_rounded,
+                    color: AppColors.blue,
+                    title: 'Screen off & locked',
+                    subtitle: !_isTracking
+                        ? 'Supported during an active session'
+                        : _usingForegroundService
+                        ? 'Foreground service is active'
+                        : 'App-only fallback; keep Luma open',
+                    trailing: Icon(
+                      _isTracking && !_usingForegroundService
+                          ? Icons.warning_amber_rounded
+                          : Icons.check_circle_outline_rounded,
+                      color: _isTracking && !_usingForegroundService ? AppColors.amber : AppColors.mint,
+                    ),
+                  ),
+                  _divider(),
+                  _settingRow(
+                    icon: Icons.power_settings_new_rounded,
+                    color: AppColors.coral,
+                    title: 'Phone powered off',
+                    subtitle: 'Cannot record while the device is powered off',
+                    trailing: SizedBox.shrink(),
+                  ),
+                ]),
+                SizedBox(height: 25),
                 _settingsGroupLabel('YOUR DATA'),
-                const SizedBox(height: 9),
+                SizedBox(height: 9),
                 _settingsCard([
                   _settingRow(
                     icon: Icons.lock_outline_rounded,
                     color: AppColors.mint,
                     title: 'Privacy & storage',
                     subtitle: 'Everything stays on your device',
-                    trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
+                    trailing: Icon(Icons.chevron_right_rounded, color: AppColors.muted),
                     onTap: _showSoundInfo,
                   ),
                   _divider(),
@@ -1661,20 +1799,20 @@ class _SleepHomePageState extends State<SleepHomePage> {
                     color: AppColors.coral,
                     title: 'Clear all sleep data',
                     subtitle: 'Delete recordings, sessions, and events',
-                    trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
+                    trailing: Icon(Icons.chevron_right_rounded, color: AppColors.muted),
                     onTap: _confirmClearAllData,
                   ),
                 ]),
-                const SizedBox(height: 25),
+                SizedBox(height: 25),
                 _settingsGroupLabel('ABOUT LUMA'),
-                const SizedBox(height: 9),
+                SizedBox(height: 9),
                 _settingsCard([
                   _settingRow(
                     icon: Icons.favorite_border_rounded,
                     color: AppColors.coral,
                     title: 'How Luma works',
                     subtitle: 'Sound detection, explained',
-                    trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
+                    trailing: Icon(Icons.chevron_right_rounded, color: AppColors.muted),
                     onTap: _showSoundInfo,
                   ),
                   _divider(),
@@ -1683,7 +1821,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
                     color: AppColors.muted,
                     title: 'Luma Sleep',
                     subtitle: 'Version 1.0.0',
-                    trailing: const SizedBox.shrink(),
+                    trailing: SizedBox.shrink(),
                   ),
                 ]),
               ]),
@@ -1695,7 +1833,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
   }
 
   Widget _settingsGroupLabel(String text) {
-    return Text(text, style: const TextStyle(color: AppColors.muted, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.3));
+    return Text(text, style: TextStyle(color: AppColors.muted, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.3));
   }
 
   Widget _settingsCard(List<Widget> children) {
@@ -1717,7 +1855,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
       onTap: onTap,
       borderRadius: BorderRadius.circular(20),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 14),
+        padding: EdgeInsets.symmetric(horizontal: 15, vertical: 14),
         child: Row(
           children: [
             Container(
@@ -1726,14 +1864,14 @@ class _SleepHomePageState extends State<SleepHomePage> {
               decoration: BoxDecoration(color: color.withValues(alpha: .12), borderRadius: BorderRadius.circular(11)),
               child: Icon(icon, color: color, size: 18),
             ),
-            const SizedBox(width: 12),
+            SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 4),
-                  Text(subtitle, style: const TextStyle(fontSize: 11, color: AppColors.muted)),
+                  Text(title, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                  SizedBox(height: 4),
+                  Text(subtitle, style: TextStyle(fontSize: 11, color: AppColors.muted)),
                 ],
               ),
             ),
@@ -1754,41 +1892,41 @@ class _SleepHomePageState extends State<SleepHomePage> {
               width: 38,
               height: 38,
               decoration: BoxDecoration(color: AppColors.lavender.withValues(alpha: .14), borderRadius: BorderRadius.circular(13)),
-              child: const Icon(Icons.nightlight_round, color: AppColors.lavenderBright, size: 20),
+              child: Icon(Icons.nightlight_round, color: AppColors.lavenderBright, size: 20),
             ),
-            const SizedBox(width: 11),
-            const Text('luma', style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800, letterSpacing: -.7)),
-            const Spacer(),
+            SizedBox(width: 11),
+            Text('luma', style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800, letterSpacing: -.7)),
+            Spacer(),
             _roundIconButton(Icons.notifications_none_rounded, () => _showSnack('You’re all caught up.')),
           ],
         ),
-        const SizedBox(height: 31),
-        Text(title, style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: -.9)),
-        const SizedBox(height: 6),
-        Text(subtitle, style: const TextStyle(color: AppColors.muted, fontSize: 14)),
+        SizedBox(height: 31),
+        Text(title, style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: -.9)),
+        SizedBox(height: 6),
+        Text(subtitle, style: TextStyle(color: AppColors.muted, fontSize: 14)),
       ],
     );
   }
 
   Widget _sectionTitle(String title) {
-    return Text(title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800));
+    return Text(title, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800));
   }
 
-  Widget _buildSectionHeading(String title, String action, VoidCallback onTap) {
+  Widget _sectionHeading(String title, String action, VoidCallback onTap) {
     return Row(
       children: [
-        Text(title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
-        const Spacer(),
+        Text(title, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+        Spacer(),
         GestureDetector(
           onTap: onTap,
-          child: Text(action, style: const TextStyle(color: AppColors.lavenderBright, fontSize: 12, fontWeight: FontWeight.w700)),
+          child: Text(action, style: TextStyle(color: AppColors.lavenderBright, fontSize: 12, fontWeight: FontWeight.w700)),
         ),
       ],
     );
   }
 
   Widget _eyebrow(String text) {
-    return Text(text, style: const TextStyle(color: AppColors.lavenderBright, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.4));
+    return Text(text, style: TextStyle(color: AppColors.lavenderBright, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.4));
   }
 
   BoxDecoration _cardDecoration() {
@@ -1830,7 +1968,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
     );
   }
 
-  Widget _divider() => Container(height: 1, color: AppColors.border, margin: const EdgeInsets.only(left: 64));
+  Widget _divider() => Container(height: 1, color: AppColors.border, margin: EdgeInsets.only(left: 64));
 
   void _showSoundInfo() {
     showModalBottomSheet<void>(
@@ -1839,26 +1977,26 @@ class _SleepHomePageState extends State<SleepHomePage> {
       showDragHandle: true,
       builder: (context) => SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(22, 0, 22, 30),
+          padding: EdgeInsets.fromLTRB(22, 0, 22, 30),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
                 children: [
-                  Container(width: 42, height: 42, decoration: BoxDecoration(color: AppColors.mint.withValues(alpha: .12), borderRadius: BorderRadius.circular(14)), child: const Icon(Icons.shield_outlined, color: AppColors.mint)),
-                  const SizedBox(width: 12),
-                  const Text('Quietly private', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+                  Container(width: 42, height: 42, decoration: BoxDecoration(color: AppColors.mint.withValues(alpha: .12), borderRadius: BorderRadius.circular(14)), child: Icon(Icons.shield_outlined, color: AppColors.mint)),
+                  SizedBox(width: 12),
+                  Text('Quietly private', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
                 ],
               ),
-              const SizedBox(height: 16),
-              const Text('Luma checks the volume of nearby sound while you sleep. When a pattern rises above your chosen threshold, it saves a short event marker so you can review it in the morning.', style: TextStyle(color: AppColors.muted, height: 1.5, fontSize: 13)),
-              const SizedBox(height: 12),
-              const Text('No audio is uploaded, transcribed, or shared. This simple detector can suggest a possible snore, but it is not a medical diagnosis.', style: TextStyle(color: AppColors.muted, height: 1.5, fontSize: 13)),
-              const SizedBox(height: 19),
+              SizedBox(height: 16),
+              Text('Luma checks the volume of nearby sound while you sleep. When a pattern rises above your chosen threshold, it saves a short event marker so you can review it in the morning.', style: TextStyle(color: AppColors.muted, height: 1.5, fontSize: 13)),
+              SizedBox(height: 12),
+              Text('No audio is uploaded, transcribed, or shared. This simple detector can suggest a possible snore, but it is not a medical diagnosis.', style: TextStyle(color: AppColors.muted, height: 1.5, fontSize: 13)),
+              SizedBox(height: 19),
               SizedBox(
                 width: double.infinity,
-                child: FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Got it')),
+                child: FilledButton(onPressed: () => Navigator.pop(context), child: Text('Got it')),
               ),
             ],
           ),
@@ -1875,15 +2013,15 @@ class _SleepHomePageState extends State<SleepHomePage> {
       builder: (context) => StatefulBuilder(
         builder: (context, setModalState) => SafeArea(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+            padding: EdgeInsets.fromLTRB(20, 0, 20, 24),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Detection sensitivity', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
-                const SizedBox(height: 7),
-                const Text('Choose how quiet a sound can be before Luma saves it.', style: TextStyle(color: AppColors.muted, fontSize: 13)),
-                const SizedBox(height: 12),
+                Text('Detection sensitivity', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+                SizedBox(height: 7),
+                Text('Choose how quiet a sound can be before Luma saves it.', style: TextStyle(color: AppColors.muted, fontSize: 13)),
+                SizedBox(height: 12),
                 RadioGroup<int>(
                   groupValue: _sensitivity,
                   onChanged: (newValue) {
@@ -1892,16 +2030,18 @@ class _SleepHomePageState extends State<SleepHomePage> {
                     setModalState(() {});
                   },
                   child: Column(
-                    children: ['Quiet', 'Balanced', 'Sensitive'].asMap().entries.map((entry) {
-                      final value = entry.key + 1;
-                      return RadioListTile<int>(
-                        value: value,
-                        title: Text(entry.value),
-                        subtitle: Text(['Only louder sounds', 'A good balance', 'Catches softer sounds'][entry.key]),
-                        activeColor: AppColors.lavender,
-                        contentPadding: EdgeInsets.zero,
-                      );
-                    }).toList(),
+                    children: [
+                      ...['Quiet', 'Balanced', 'Sensitive'].asMap().entries.map((entry) {
+                        final value = entry.key + 1;
+                        return RadioListTile<int>(
+                          value: value,
+                          title: Text(entry.value),
+                          subtitle: Text(['Only louder sounds', 'A good balance', 'Catches softer sounds'][entry.key]),
+                          activeColor: AppColors.lavender,
+                          contentPadding: EdgeInsets.zero,
+                        );
+                      }),
+                    ],
                   ),
                 ),
               ],
@@ -1921,10 +2061,10 @@ class _SleepHomePageState extends State<SleepHomePage> {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: AppColors.surface,
-        title: const Text('Clear all sleep data?'),
-        content: const Text('This permanently deletes saved recordings, sleep sessions, sound events, and reports from this device.'),
+        title: Text('Clear all sleep data?'),
+        content: Text('This permanently deletes saved recordings, sleep sessions, sound events, and reports from this device.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel')),
           FilledButton(
             onPressed: () async {
               Navigator.pop(context);
@@ -1945,7 +2085,7 @@ class _SleepHomePageState extends State<SleepHomePage> {
               }
             },
             style: FilledButton.styleFrom(backgroundColor: AppColors.coral, foregroundColor: AppColors.background),
-            child: const Text('Delete everything'),
+            child: Text('Delete everything'),
           ),
         ],
       ),
@@ -1962,7 +2102,7 @@ class _SleepOverlayApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark(useMaterial3: true).copyWith(
         scaffoldBackgroundColor: Colors.transparent,
-        colorScheme: const ColorScheme.dark(
+        colorScheme: ColorScheme.dark(
           primary: AppColors.lavender,
           secondary: AppColors.mint,
           surface: AppColors.surface,
@@ -2007,13 +2147,13 @@ class _SleepOverlayPanelState extends State<_SleepOverlayPanel> {
         child: Align(
           alignment: Alignment.topRight,
           child: Container(
-            margin: const EdgeInsets.only(top: 8, right: 8),
-            padding: const EdgeInsets.fromLTRB(14, 11, 9, 11),
+            margin: EdgeInsets.only(top: 8, right: 8),
+            padding: EdgeInsets.fromLTRB(14, 11, 9, 11),
             decoration: BoxDecoration(
-              color: const Color(0xFF171D31),
+              color: Color(0xFF171D31),
               borderRadius: BorderRadius.circular(22),
               border: Border.all(color: AppColors.lavender.withValues(alpha: .45)),
-              boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 16, offset: Offset(0, 5))],
+              boxShadow: [BoxShadow(color: Colors.black54, blurRadius: 16, offset: Offset(0, 5))],
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -2027,8 +2167,8 @@ class _SleepOverlayPanelState extends State<_SleepOverlayPanel> {
                     boxShadow: [BoxShadow(color: AppColors.mint.withValues(alpha: .7), blurRadius: 8)],
                   ),
                 ),
-                const SizedBox(width: 9),
-                const Column(
+                SizedBox(width: 9),
+                Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -2037,9 +2177,9 @@ class _SleepOverlayPanelState extends State<_SleepOverlayPanel> {
                     Text('Luma is listening', style: TextStyle(color: AppColors.ink, fontSize: 12, fontWeight: FontWeight.w700)),
                   ],
                 ),
-                const SizedBox(width: 12),
-                Text(_elapsed, style: const TextStyle(color: AppColors.mint, fontSize: 11, fontWeight: FontWeight.w800)),
-                const SizedBox(width: 8),
+                SizedBox(width: 12),
+                Text(_elapsed, style: TextStyle(color: AppColors.mint, fontSize: 11, fontWeight: FontWeight.w800)),
+                SizedBox(width: 8),
                 Material(
                   color: AppColors.coral.withValues(alpha: .14),
                   borderRadius: BorderRadius.circular(13),
@@ -2048,7 +2188,7 @@ class _SleepOverlayPanelState extends State<_SleepOverlayPanel> {
                       FlutterOverlayWindow.shareData('stop_tracking');
                     },
                     borderRadius: BorderRadius.circular(13),
-                    child: const Padding(
+                    child: Padding(
                       padding: EdgeInsets.all(9),
                       child: Icon(Icons.stop_rounded, color: AppColors.coral, size: 17),
                     ),
@@ -2076,13 +2216,13 @@ class _InlineMetric extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Icon(icon, color: AppColors.muted, size: 15),
-        const SizedBox(width: 6),
+        SizedBox(width: 6),
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(value, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
-            const SizedBox(height: 3),
-            Text(label, style: const TextStyle(color: AppColors.muted, fontSize: 9)),
+            Text(value, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+            SizedBox(height: 3),
+            Text(label, style: TextStyle(color: AppColors.muted, fontSize: 9)),
           ],
         ),
       ],
